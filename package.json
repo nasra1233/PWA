@@ -1,0 +1,13 @@
+{
+  "name": "abyt-network-ios",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "prepare-ios": "npx cap add ios || true && npx cap sync ios"
+  },
+  "dependencies": {
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/cli": "^6.0.0",
+    "@capacitor/ios": "^6.0.0"
+  }
+}

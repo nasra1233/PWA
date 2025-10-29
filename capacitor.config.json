@@ -1,0 +1,10 @@
+{
+  "appId": "com.theswarminitiative.abytnetwork",
+  "appName": "Abyt Network",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "server": {
+    "url": "https://studio--studio-4734160515-fb8c4.us-central1.hosted.app/",
+    "cleartext": true
+  }
+}
