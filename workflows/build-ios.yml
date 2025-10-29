@@ -1,0 +1,125 @@
+name: Build iOS IPA
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    env:
+      APP_BUNDLE_ID: com.theswarminitiative.abytnetwork
+      SCHEME: App
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Prepare Capacitor iOS project
+        run: |
+          npx cap add ios || true
+          npx cap sync ios
+
+      - name: Build iOS Archive (unsigned by default)
+        run: |
+          cd ios/App
+          set -o pipefail
+          xcodebuild -scheme "$SCHEME" -sdk iphoneos -configuration Release archive -archivePath $PWD/build/App.xcarchive | tee xcodebuild.log
+
+      - name: Export unsigned IPA
+        run: |
+          cd ios/App
+          mkdir -p build/export-unsigned
+          # Export options for an unsigned IPA (ad-hoc/manual can be placed here if you sign)
+          cat > exportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>ad-hoc</string>
+            <key>compileBitcode</key>
+            <false/>
+            <key>signingStyle</key>
+            <string>manual</string>
+          </dict>
+          </plist>
+          EOF
+          # Try export (might fail if signing is required). The artifact step will still try to upload ipa if created.
+          xcodebuild -exportArchive -archivePath build/App.xcarchive -exportPath build/export-unsigned -exportOptionsPlist exportOptions.plist || true
+
+      - name: Prepare for signing (optional)
+        if: ${{ secrets.APPSTORE_P8_BASE64 || secrets.APPLE_CERT_BASE64 }}
+        run: |
+          echo "Signing resources detected in secrets. Preparing keychain and provisioning profiles..."
+          mkdir -p tmp_certs
+          # If App Store Connect API P8 key provided, decode and store it
+          if [ -n "${{ secrets.APPSTORE_P8_BASE64 }}" ]; then
+            echo "${{ secrets.APPSTORE_P8_BASE64 }}" | base64 --decode > tmp_certs/AuthKey.p8
+            echo "Decoded App Store Connect .p8 key"
+          fi
+          # If legacy .p12 provided, decode and import
+          if [ -n "${{ secrets.APPLE_CERT_BASE64 }}" ]; then
+            echo "${{ secrets.APPLE_CERT_BASE64 }}" | base64 --decode > tmp_certs/certificate.p12
+            security create-keychain -p actions temp_keychain
+            security default-keychain -s temp_keychain
+            security unlock-keychain -p actions temp_keychain
+            security import tmp_certs/certificate.p12 -k ~/Library/Keychains/temp_keychain -P "${{ secrets.APPLE_CERT_PASSWORD }}" -A || true
+            security list-keychains -d user -s ~/Library/Keychains/temp_keychain
+            echo "Imported p12 into temporary keychain."
+          fi
+          # If provisioning profile provided, decode and move it
+          if [ -n "${{ secrets.APPLE_PROVISION_BASE64 }}" ]; then
+            echo "${{ secrets.APPLE_PROVISION_BASE64 }}" | base64 --decode > tmp_certs/profile.mobileprovision
+            mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+            cp tmp_certs/profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+            echo "Installed provisioning profile."
+          fi
+
+      - name: Export signed IPA (Fastlane + App Store Connect API)
+        if: ${{ secrets.APPSTORE_P8_BASE64 }}
+        run: |
+          echo "Using App Store Connect API .p8 key to authenticate fastlane and export signed ipa."
+          mkdir -p fastlane
+          # write p8 key
+          echo "${{ secrets.APPSTORE_P8_BASE64 }}" | base64 --decode > fastlane/AuthKey.p8
+          # create AppStore Connect API key config for fastlane
+          cat > fastlane/Appfile <<EOF
+          apple_id("")
+          team_id("${{ secrets.APPLE_TEAM_ID }}")
+          EOF
+          # create minimal Fastfile to build and export
+          cat > fastlane/Fastfile <<'FASTFILE'
+          default_platform(:ios)
+          platform :ios do
+            desc "Build and export signed ipa"
+            lane :build_signed do
+              ENV["APP_STORE_CONNECT_API_KEY_PATH"] = "fastlane/AuthKey.p8"
+              # Use match or sigh here; user needs to grant appstoreconnect access with API key permissions
+              # This lane assumes provisioning and signing are managed in Xcode project and provisioning profile is present
+              build_app(scheme: "App", export_method: "ad-hoc", export_options: {
+                provisioningProfiles: {"com.theswarminitiative.abytnetwork" => ENV["PROVISION_PROFILE_NAME"] || ""}
+              })
+            end
+          end
+          FASTFILE
+          gem install fastlane -v 2.226.0 --no-document || true
+          bundle config set --local path vendor/bundle || true
+          bundle install || true
+          bundle exec fastlane ios build_signed || true
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Abyt-IPA
+          path: |
+            ios/App/build/export-unsigned/*.ipa
+            ios/App/build/export/*.ipa
