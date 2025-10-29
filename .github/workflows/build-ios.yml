@@ -1,0 +1,51 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: |
+          npm install -g npm@latest
+          npm ci || npm install
+
+      - name: Install Capacitor and CocoaPods
+        run: |
+          npm install -g @capacitor/cli
+          npm install
+          npx cap sync ios
+          cd ios/App && pod install --repo-update
+
+      - name: Build iOS App (Xcode Archive)
+        run: |
+          cd ios/App
+          xcodebuild -workspace App.xcworkspace \
+                     -scheme App \
+                     -sdk iphoneos \
+                     -configuration Release \
+                     archive -archivePath $PWD/build/App.xcarchive
+
+      - name: Export IPA
+        run: |
+          mkdir -p build/ipa
+          xcodebuild -exportArchive \
+                     -archivePath ios/App/build/App.xcarchive \
+                     -exportOptionsPlist ios/App/exportOptions.plist \
+                     -exportPath build/ipa
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AbytNetwork-IPA
+          path: build/ipa/*.ipa
