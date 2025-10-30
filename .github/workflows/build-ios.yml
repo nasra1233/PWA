@@ -26,8 +26,12 @@ jobs:
         with:
           flutter-version: '3.16.0'
 
-      - name: Install dependencies
-        run: flutter pub get
+     - name: Install dependencies
+       run: |
+       cd abyt_network_ios
+       flutter pub get
 
       - name: Build iOS IPA
-        run: flutter build ipa --release
+         run: |
+       cd abyt_network_ios
+       flutter build ipa --release
